@@ -46,6 +46,7 @@ CLIENT = OpenAI(
 )
 
 MODEL_NAME = "llama-3.1-8b-instant"
+LARGE_MODEL_NAME = "llama-3.3-70b-versatile"
 
 # --- Standard library ---
 import os
@@ -294,8 +295,7 @@ def planner_agent(topic: str, model: str = MODEL_NAME) -> list[str]:
     1. ONE AGENT PER STEP: Each step MUST use EXACTLY ONE agent.
     2. NO CHAINING: Never use 'then', 'and', 'followed by', or ';' to link tasks for different agents in one step.
     3. ATOMICITY: If you need an editor to revise AND a writer to finalize, these MUST be two separate steps.
-    4. Format: 'Use the [agent_name] to [specific task]'.
-    5. Do not extend more than 4 steps
+    4. Format: 'Use the [agent_name] to [specific task].
 
     Available agents:
     - research_agent (searches web, Wikipedia, and arXiv)
@@ -303,7 +303,7 @@ def planner_agent(topic: str, model: str = MODEL_NAME) -> list[str]:
     - editor_agent (reflects, critiques, and suggests improvements)
 
     Constraints:
-    - Do not exceed 5 steps total.
+    - Do not exceed 5 steps in total.
     - The editor_agent must be called at least once.
     - The final step must be the writer_agent generating the complete research report.
     - Do not include explanation text — return ONLY the Python list.
@@ -369,7 +369,7 @@ def research_agent(task, model=MODEL_NAME):
         f"You are a helpful research assistant. Use available tools to find accurate information. {TIME_INJESTION}"
         "IMPORTANT: For any tool call, set 'max_results' to a maximum of 5 to stay within API limits. "
         "STRICT NEGATIVE CONSTRAINTS: "
-        "1.Do not exceed 5 total tool calls per task to conserve tokens."
+        "1.Do not exceed 3 total tool calls per task to conserve tokens."
         "2.Do not call tool that is not available like attempting to call 'brave_search'"
     )
 
@@ -429,7 +429,7 @@ def writer_agent(task: str, model: str = MODEL_NAME) -> str:
 
     # Specialized in academic content without meta-talk, ratings, or process notes.
     system_prompt = (
-        f"You are a writing agent specialized in generating professional academic and technical research reports.{TIME_INJESTION} "
+        f"You are a research report writing agent specialized in generating professional academic and technical research reports.{TIME_INJESTION} "
         "Your goal is to provide a clean final document based on the provided context and feedback. "
         "STRICT NEGATIVE CONSTRAINTS: "
         "1. Do NOT include any 'Style and Grammar' or 'Consistency' review sections. "
@@ -437,7 +437,8 @@ def writer_agent(task: str, model: str = MODEL_NAME) -> str:
         "3. Do NOT include meta-talk about the writing process or mentions of removing requested sections (e.g., 'I have removed the appendix'). "
         "4. Do NOT include an Appendix header or placeholder if it is empty. "
         "5. Do NOT include any self-evaluation or concluding remarks about the report's own quality."
-        "6. Do Not include templates like 'References:[List of references with corresponding DOIs or URLs]'"
+        "6. Do NOT include templates like 'References:[List of references with corresponding DOIs or URLs]'"
+        "7. Do NOT give the return the result as plain text instead of report structured markdown"
     )
 
     # Define the system msg by using the system_prompt and assigning the role of system
@@ -467,7 +468,13 @@ def editor_agent(task: str, model: str = MODEL_NAME) -> str:
     print("==================================")
 
     # This should assign the LLM the role of an editor agent specialized in reflecting on, critiquing, or improving existing drafts.
-    system_prompt = f"You are a research article editor. Your task is to reflect on, critique, or improve drafts. Do not include appendix at the last. Do not mention missing contents in appendix. Do remove appendix, if needed. Do remove random code.{TIME_INJESTION}"
+    system_prompt = (f"You are a research article editor. Your task is to reflect on, critique, or improve drafts. Focus on meaningfulness, structure, coherence of the report.{TIME_INJESTION}"
+                    "STRICT NEGATIVE CONSTRAINTS: "
+                    "Do Not miss to suggest the removal of appendix,if is at the last." 
+                    "Do Not miss to suggest the removal of missing contents contents."
+                    "Do Not miss to suggest the removal of random code." 
+                    "Do Not miss to suggest the removal of repeated contents."
+                    )
 
     # Define the system msg by using the system_prompt and assigning the role of system
     system_msg = {"role" : "system", "content" : system_prompt}
@@ -507,6 +514,8 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
     max_steps = 5
 
     N=len(plan_steps)
+    
+    agent_model=model
 
     print(f"Number of steps in initial plan: {N}")
 
@@ -563,29 +572,54 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
         agent_name = agent_info["agent"]
         task = agent_info["task"]
 
-        context = "\n".join([
-            f"Step {j+1} executed by {a}:\n{r}"
-            for j, (s, a, r) in enumerate(history)
-        ])
-        enriched_task = f"""
-        You are {agent_name}.
-
-        Here is the context of what has been done so far:
-        {context}
-
-        Your next task is:
-        {task}
-        """
-
-        print(f"\n🛠️ Executing with agent: `{agent_name}` on task: {task}")
 
         if agent_name in agent_registry:
-            output = agent_registry[agent_name](enriched_task)
+            
+            context=""
+
+            if agent_name=="research_agent":
+                
+              agent_model=LARGE_MODEL_NAME 
+
+            else:
+                
+                context="Here is the context of what has been done so far:"
+                
+                if agent_name=="editor_agent":
+            
+                    context = context +"\n"+ "\n".join([
+                        f"Step {j+1} executed by {a}:\n{r}"
+                        for j, (s, a, r) in enumerate(history[-1:])
+                    ])   
+                    
+                else:
+                    
+                    context = context +"\n"+ "\n".join([
+                        f"Step {j+1} executed by {a}:\n{r}"
+                        for j, (s, a, r) in enumerate(history)
+                    ])    
+                    
+                    agent_model=LARGE_MODEL_NAME                         
+
+            enriched_task = f"""
+            You are {agent_name}.
+
+            {context}
+
+            Your next task is:
+            {task}
+            """
+
+            print(f"\n🛠️ Executing with agent: `{agent_name}` on task: {task}")                    
+                    
+            output = agent_registry[agent_name](enriched_task, model=agent_model)
             history.append((step, agent_name, output))
         else:
             output = f"⚠️ Unknown agent: {agent_name}"
             history.append((step, agent_name, output))
-
+            
+        agent_model=model
+        
         print(f"✅ Output:\n{output}")
 
     return history
