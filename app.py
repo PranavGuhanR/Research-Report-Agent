@@ -9,9 +9,8 @@ st.markdown("Generate deep research reports using a multi-agent workflow (Planne
 # --- Sidebar for Configuration ---
 with st.sidebar:
     st.header("Configuration")
-    topic = st.text_input("Research Topic", placeholder="e.g., Quantum Computing Trends")
+    topic = st.text_input("Research Topic", placeholder="e.g., Attention Is All You Need")
     run_button = st.button("Start Research")
-
 
 # --- Standard library
 from datetime import datetime
@@ -22,8 +21,6 @@ import ast
 
 # --- Third-party --
 from IPython.display import Markdown, display
-
-import streamlit as st
 from openai import OpenAI
 import os
 
@@ -295,7 +292,10 @@ def planner_agent(topic: str, model: str = MODEL_NAME) -> list[str]:
     1. ONE AGENT PER STEP: Each step MUST use EXACTLY ONE agent.
     2. NO CHAINING: Never use 'then', 'and', 'followed by', or ';' to link tasks for different agents in one step.
     3. ATOMICITY: If you need an editor to revise AND a writer to finalize, these MUST be two separate steps.
-    4. Format: 'Use the [agent_name] to [specific task].
+    4. Format: 'Use the [agent_name] to [specific task]'.
+    5. Explicitly ensure that the generated list contains only simple, literal strings without f-string syntax.
+
+  
 
     Available agents:
     - research_agent (searches web, Wikipedia, and arXiv)
@@ -305,10 +305,13 @@ def planner_agent(topic: str, model: str = MODEL_NAME) -> list[str]:
     Constraints:
     - Do not exceed 5 steps in total.
     - The editor_agent must be called at least once.
-    - The final step must be the writer_agent generating the complete research report.
+    - In the final step do call the writer_agent only for generating the complete research report.
+    - Do not call any agent other than writer_agent in the final step.
     - Do not include explanation text — return ONLY the Python list.
 
-    Example of BAD step: \"Use the editor_agent to revise, then use the writer_agent to finalize.\"
+    Example of BAD step: 
+    \"Use the editor_agent to revise, then use the writer_agent to finalize.\"
+    \"Use research agent to search for 'research topic' instead of making it search for the actual topic.\"
     Example of GOOD steps:
     \"Use the editor_agent to provide feedback on the draft.\",
     \"Use the writer_agent to generate the final report based on feedback.\"
@@ -439,6 +442,7 @@ def writer_agent(task: str, model: str = MODEL_NAME) -> str:
         "5. Do NOT include any self-evaluation or concluding remarks about the report's own quality."
         "6. Do NOT include templates like 'References:[List of references with corresponding DOIs or URLs]'"
         "7. Do NOT give the return the result as plain text instead of report structured markdown"
+        "8. Do NOT include feedback from editor_agent like 'Note: Please replace [Insert Figure 1] with the actual figure.' "
     )
 
     # Define the system msg by using the system_prompt and assigning the role of system
@@ -533,7 +537,7 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
 
     for i, step in enumerate(plan_steps):
 
-        agent_decision_prompt = f"""
+        agent_decision_prompt = f'''
         You are an execution manager for a multi-agent research team.
 
         {TIME_INJESTION}
@@ -558,7 +562,7 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
         Only respond with a valid JSON object. Do not include explanations or markdown formatting.
 
         Instruction: "{step}"
-        """
+        '''
         response = CLIENT.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": agent_decision_prompt}],
@@ -601,14 +605,14 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
                     
                     agent_model=LARGE_MODEL_NAME                         
 
-            enriched_task = f"""
+            enriched_task = f'''
             You are {agent_name}.
 
             {context}
 
             Your next task is:
             {task}
-            """
+            '''
 
             print(f"\n🛠️ Executing with agent: `{agent_name}` on task: {task}")                    
                     
@@ -623,6 +627,7 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
         print(f"✅ Output:\n{output}")
 
     return history
+
 
 # --- Logic Wrapper ---
 if run_button and topic:
