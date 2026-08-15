@@ -42,8 +42,8 @@ CLIENT = OpenAI(
     api_key=GROQ_API_KEY
 )
 
-MODEL_NAME = "llama-3.1-8b-instant"
-LARGE_MODEL_NAME = "llama-3.3-70b-versatile"
+MODEL_NAME = "openai/gpt-oss-20b"
+LARGE_MODEL_NAME = "openai/gpt-oss-120b"
 
 # --- Standard library ---
 import os
@@ -64,7 +64,7 @@ session.headers.update({
     "User-Agent": "LF-ADP-Agent/1.0 (mailto:your.email@example.com)"
 })
 
-def arxiv_search_tool(query: str, max_results: int = 5) -> list[dict]:
+def arxiv_search_tool(query: str, max_results: int = 3) -> list[dict]:
     """
     Searches arXiv for research papers matching the given query.
     """
@@ -123,7 +123,7 @@ arxiv_tool_def = {
                 "max_results": {
                     "type": "integer",
                     "description": "Maximum number of results to return.",
-                    "default": 5
+                    "default": 3
                 }
             },
             "required": ["query"]
@@ -136,7 +136,7 @@ x=x.strftime("%c")
 TIME_INJESTION=f"Now, It is {x}. You should make use of the time, if needed"
 print(x)
 
-def tavily_search_tool(query: str, max_results: int = 5, include_images: bool = False) -> list[dict]:
+def tavily_search_tool(query: str, max_results: int = 3, include_images: bool = False) -> list[dict]:
     """
     Perform a search using the Tavily API.
 
@@ -196,7 +196,7 @@ tavily_tool_def = {
                 "max_results": {
                     "type": "integer",
                     "description": "Maximum number of results to return.",
-                    "default": 5
+                    "default": 3
                 },
                 "include_images": {
                     "type": "boolean",
@@ -368,12 +368,15 @@ def research_agent(task, model=MODEL_NAME):
         wikipedia_tool_def
     ]
 
+    valid_tool_names = [t["function"]["name"] for t in tools_spec]
+
     system_prompt = (
-        f"You are a helpful research assistant. Use available tools to find accurate information. {TIME_INJESTION}"
-        "IMPORTANT: For any tool call, set 'max_results' to a maximum of 5 to stay within API limits. "
-        "STRICT NEGATIVE CONSTRAINTS: "
-        "1.Do not exceed 3 total tool calls per task to conserve tokens."
-        "2.Do not call tool that is not available like attempting to call 'brave_search'"
+        f"You are a helpful research assistant. {TIME_INJESTION}\n"
+        f"STRICT TOOL USAGE INSTRUCTIONS:\n"
+        f"1. You MUST ONLY use the exact tool names from this list: {valid_tool_names}.\n"
+        f"2. Never alter, invent, or misspell tool names (e.g., do not call 'webikipedia_search_tool').\n"
+        f"3. For any tool call, set 'max_results' to a maximum of 5 to stay within API limits.\n"
+        f"4. Do not exceed 3 total tool calls per task to conserve tokens."
     )
 
 
@@ -443,6 +446,7 @@ def writer_agent(task: str, model: str = MODEL_NAME) -> str:
         "6. Do NOT include templates like 'References:[List of references with corresponding DOIs or URLs]'"
         "7. Do NOT give the return the result as plain text instead of report structured markdown"
         "8. Do NOT include feedback from editor_agent like 'Note: Please replace [Insert Figure 1] with the actual figure.' "
+        "9. Do NOT include templates like 'Authors: [Redacted for review] Affiliations: [Redacted]' "
     )
 
     # Define the system msg by using the system_prompt and assigning the role of system
@@ -454,11 +458,11 @@ def writer_agent(task: str, model: str = MODEL_NAME) -> str:
     # Add both system and user messages to the messages list
     messages = [system_msg, user_msg]
 
-
     response = CLIENT.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=1.0
+        temperature=1.0,
+        max_tokens=4096  # To prevent early truncation
     )
 
     return response.choices[0].message.content
@@ -587,21 +591,12 @@ def executor_agent(topic, plan_steps, model: str = MODEL_NAME, limit_steps: bool
 
             else:
                 
-                context="Here is the context of what has been done so far:"
-                
-                if agent_name=="editor_agent":
-            
-                    context = context +"\n"+ "\n".join([
-                        f"Step {j+1} executed by {a}:\n{r}"
-                        for j, (s, a, r) in enumerate(history[-1:])
-                    ])   
-                    
-                else:
-                    
-                    context = context +"\n"+ "\n".join([
-                        f"Step {j+1} executed by {a}:\n{r}"
-                        for j, (s, a, r) in enumerate(history)
-                    ])    
+                context="Here is the context of what has been done so far:" +"\n"+ "\n".join([
+                    f"Step {j+1} executed by {a}:\n{r}"
+                    for j, (s, a, r) in enumerate(history[-1:])
+                ])   
+
+                if agent_name!="editor_agent":
                     
                     agent_model=LARGE_MODEL_NAME                         
 
